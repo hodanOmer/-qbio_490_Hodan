@@ -1,0 +1,287 @@
+---
+title: "Introduction to MAF"
+author: Joshua Lin, Christopher Kim, Erika Li, Jeanne Revilla, Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/12/2026
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *If you do work with a partner, at the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+if (!require("knitr", quietly = TRUE))
+install.packages("knitr")
+if (!require("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install(version = "3.23")
+if (!require("TCGAbiolinks", quietly = TRUE))
+BiocManager::install("TCGAbiolinks")
+if (!require("maftools", quietly = TRUE))
+BiocManager::install("maftools")
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+
+knitr::opts_knit$set(root.dir = normalizePath("/home1/hodanome/490_cluster/analysis_data"))
+
+clin_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Clinical",
+  data.type = "Clinical Supplement",
+  data.format = 'BCR Biotab'
+) 
+
+GDCdownload(clin_query)
+ clinical.BCRtab.all <- GDCprepare(clin_query)
+ clinical <- clinical.BCRtab.all$clinical_patient_brca[-c(1, 2), ]
+ colnames(clinical)[colnames(clinical) == "bcr_patient_barcode"] <- "Tumor_Sample_Barcode"
+ 
+ maf_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+# errors were popping up so used gemini to fix 
+file.remove(list.files(pattern = "\\.tar\\.gz$"))
+GDCdownload(maf_query, method = "api", files.per.chunk = 10)
+maf <- GDCprepare(maf_query)
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(
+  maf = maf,
+  clinicalData = clinical,
+  isTCGA = TRUE
+) 
+saveRDS(maf_object, file = "demo_maf_object.rds")
+maf_object <- readRDS("demo_maf_object.rds")
+```
+
+
+It's useful to save your MAF_object, so that you don't have to go through the trouble of querying and preparing it everytime. The saveRDS function allows us to save an R object, allowing us to access it directly from our files. 
+```{r}
+saveRDS(fill in with name of your MAF_object, file = "/home1/hodanome/490_cluster/analysis_data/maf_object.rds")
+saveRDS(maf_object, file = "/home1/hodanome/490_cluster/analysis_data/maf_object.rds")
+```
+
+When you reopen a new R session and want to access your MAF_object, you can use the readRDS function to load the object back into a new variable.
+```{r}
+MAF_object <- readRDS(file = "/home1/hodanome/490_cluster/analysis_data/maf_object.rds")
+MAF_object <- readRDS(file = "/home1/hodanome/490_cluster/analysis_data/maf_object.rds")
+```
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+# clin rad error popped up so used gemini to help again + used it to help me create some of the code chunks
+clin_rad <- clinical.BCRtab.all$clinical_radiation_brca
+colnames(clin_rad)
+# find the two most common non-empty radiation therapy types gemini
+top_2_radiation_types <- names(
+  sort(
+    table(clin_rad$radiation_therapy_type[
+      !is.na(clin_rad$radiation_therapy_type) & clin_rad$radiation_therapy_type != ""
+    ]), 
+    decreasing = TRUE
+  )
+)[1:2]
+
+# Print the top two types so you know which groups you are comparing
+print(top_2_radiation_types)
+clin_rad$radiation_factor <- factor(
+  ifelse(clin_rad$radiation_therapy_type %in% top_2_radiation_types, 
+         clin_rad$radiation_therapy_type, NA),
+  levels = top_2_radiation_types
+)
+table(clin_rad$radiation_factor, useNA = "ifany")
+
+#Create a new column 'radiation_factor' containing only the top two groups
+group1_patients <- clin_rad$bcr_patient_barcode[clin_rad$radiation_therapy_type == top_2_radiation_types[1]]
+group2_patients <- clin_rad$bcr_patient_barcode[clin_rad$radiation_therapy_type == top_2_radiation_types[2]]
+
+#Create boolean masks for both groups
+rad_group1_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[
+  substr(maf_object@clinical.data$Tumor_Sample_Barcode, 1, 12) %in% group1_patients
+]
+
+#Extract barcodes for subsetting
+rad_group2_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[
+  substr(maf_object@clinical.data$Tumor_Sample_Barcode, 1, 12) %in% group2_patients
+]
+# 5. Subset the MAF object into the two radiation groups
+rad_group1_object <- subsetMaf(maf = maf_object, tsb = rad_group1_barcodes)
+rad_group2_object <- subsetMaf(maf = maf_object, tsb = rad_group2_barcodes)
+
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+#maf suplment + gemini to help with errors(correcting code from before so that it is more clean, and can be used to create the co-onco plot)---redid question one but with diff variable since the one before wasnt the best for the onco-plot--- used gemini to generate some code
+
+# 1. Load clin_drug data table
+clin_drug <- clinical.BCRtab.all$clinical_drug_brca
+
+# 2. Clean drug names and extract top 2 non-empty valid drugs
+clin_drug$drug_clean <- toupper(trimws(clin_drug$pharmaceutical_therapy_drug_name))
+
+valid_drugs <- clin_drug$drug_clean[
+  !is.na(clin_drug$drug_clean) & 
+  clin_drug$drug_clean != "" & 
+  !grepl("^\\[", clin_drug$drug_clean)
+]
+
+# Top 2 most common drugs (e.g., Tamoxifen vs Anastrozole)
+top_2_drugs <- names(sort(table(valid_drugs), decreasing = TRUE))[1:2]
+print(top_2_drugs)
+
+# 3. Create factor column
+clin_drug$drug_factor <- factor(
+  ifelse(clin_drug$drug_clean %in% top_2_drugs, clin_drug$drug_clean, NA),
+  levels = top_2_drugs
+)
+
+# 4. Extract patient barcodes and match against Tumor_Sample_Barcode
+group1_patients <- clin_drug$bcr_patient_barcode[which(clin_drug$drug_factor == top_2_drugs[1])]
+group2_patients <- clin_drug$bcr_patient_barcode[which(clin_drug$drug_factor == top_2_drugs[2])]
+
+group1_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[
+  substr(maf_object@clinical.data$Tumor_Sample_Barcode, 1, 12) %in% group1_patients
+]
+group2_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[
+  substr(maf_object@clinical.data$Tumor_Sample_Barcode, 1, 12) %in% group2_patients
+]
+
+# 5. Subset MAF objects
+group1_object <- subsetMaf(maf = maf_object, tsb = group1_barcodes)
+group2_object <- subsetMaf(maf = maf_object, tsb = group2_barcodes)
+top15_genes <- getGeneSummary(maf_object)$Hugo_Symbol[1:15]
+
+# Render coOncoplot
+png("co_oncoplot_drug_types.png", width = 10, height = 8, units = "in", res = 300)
+
+coOncoplot(
+  m1 = group1_object,
+  m2 = group2_object,
+  m1Name = top_2_drugs[1],
+  m2Name = top_2_drugs[2],
+  genes = top15_genes
+)
+
+dev.off()
+
+```
+- A gene that has a large discrepency in percent mutation beween the groups is TP53. The Cytoxan group has it mutated in 38% of paitents while in the Tamoxifen Group has it mutates in 18% of paitents. The main discrepancy is the fact that TP53 is more than twice as frequently mutates with the patients treated with cytoxan compared to those treated with tamoxifen.  TP53 acts as a tumor suppressor, meaning it regulates cell division and keeps cells from growing and dividing too fast or in an uncontrolled way(https://medlineplus.gov/genetics/gene/tp53/). A possible epxlanation for the discrepency is that Cytoxan works by causing the DNA cross-linking and severe DNA double-strand breaks. Chemo is also usually given to high-risk patients with really agressive tumors that sometimes lack hormone receptors. These tumors natrually carry higher basline rate of TP53 mutations as well.-- same source cited before
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+gene_name <- "TP53"
+# this part I used help with gemini
+group1_mutated_tsb <- unique(subsetMaf(maf = group1_object, genes = gene_name)@data$Tumor_Sample_Barcode)
+group2_mutated_tsb <- unique(subsetMaf(maf = group2_object, genes = gene_name)@data$Tumor_Sample_Barcode)
+group1_status <- ifelse(group1_barcodes %in% group1_mutated_tsb, "Mutated", "Wild_Type")
+group2_status <- ifelse(group2_barcodes %in% group2_mutated_tsb, "Mutated", "Wild_Type")
+contingency_df <- data.frame(
+  Treatment = c(rep(top_2_drugs[1], length(group1_status)), 
+                rep(top_2_drugs[2], length(group2_status))),
+  TP53_Status = c(group1_status, group2_status)
+)
+
+# making the contingency table (a little help with gemini)
+cont_matrix <- table(contingency_df$Treatment, contingency_df$TP53_Status)
+print("Contingency Table:")
+print(cont_matrix)
+# fisher test
+fisher_result <- fisher.test(cont_matrix)
+print(fisher_result)
+
+png("tp53_treatment_mosaicplot.png", width = 8, height = 6, units = "in", res = 300)
+mosaicplot(cont_matrix, 
+           main = "Mosaic Plot: TP53 Mutation Status by Treatment",
+           xlab = "Treatment Group", 
+           ylab = "TP53 Status",
+           color = c("#E41A1C", "#377EB8"),
+           shade = TRUE)
+dev.off()
+
+
+```
+For the interpetation of the fishers exact test, the Cytoxan group are around 2.74 times high in terms of the odds og having a mutation in the TP53 gene in comparison to the Tamoxifen group. Also the 95% confidence interval which is 1.72-4.42 doesnt cross 1.0, this sort of indicates an increase in odds. The P-value is also really small so its safe to reject the null hypothesis of this happening because of an independent cause. So it can be concluded that there is a statistically signficant association between the treatment variable of Tamoxifen vs Cytoxan when it comes to TP53 mutations specifically.
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+chosen_gene <- "TP53" 
+# my code with the help of gemini
+png("tp53_colollipop_plot.png", width = 10, height = 6, units = "in", res = 300)
+lollipopPlot2(
+  m1 = group1_object,
+  m2 = group2_object,
+  gene = chosen_gene,
+  m1_name = top_2_drugs[1],  # "TAMOXIFEN"
+  m2_name = top_2_drugs[2]   # "CYTOXAN"
+)
+
+dev.off()
+```
+-- From the Co-Lolipop Plot it can be seen that Cytoxan has a significantly higher overall mutation frequenct(37.74%) compared to Tamoxifen(18.18). So in the plot the cytocan panel displays a much higher total density lolipops along the protein. Also the Tamoxifen group mostly had missense mutations while the cytocan group has a bigger diversity when it came to the types of mutations.
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+# kept on having problems so this is pretty much gemini code
+library(data.table)
+library(maftools)
+
+
+clin <- as.data.frame(maf_object@clinical.data)
+
+
+vital_vals <- tolower(as.character(clin$vital_status))
+clin$Overall_Survival_Status <- ifelse(!is.na(vital_vals) & vital_vals %in% c("dead", "deceased", "1", 1), 1, 0)
+
+
+death_days <- suppressWarnings(as.numeric(as.character(clin$death_days_to)))
+followup_days <- suppressWarnings(as.numeric(as.character(clin$last_contact_days_to)))
+
+
+surv_days <- ifelse(!is.na(death_days) & death_days > 0, death_days, followup_days)
+
+clin$Overall_Survival_Months <- surv_days / 30.44
+
+
+clin_clean <- clin[!is.na(clin$Overall_Survival_Months) & clin$Overall_Survival_Months > 0, ]
+
+
+maf_object@clinical.data <- as.data.table(clin_clean)
+
+
+png("tp53_mafSurvival_kmplot.png", width = 8, height = 6, units = "in", res = 300)
+
+mafSurvival(
+  maf = maf_object,
+  genes = "TP53",
+  time = "Overall_Survival_Months",
+  Status = "Overall_Survival_Status",
+  isTCGA = FALSE
+)
+
+dev.off()
+```
+- The resulting KM pot that hypothesis the overall survival between TP53 mutant and wild type patients shows no statistically significant difference in survival between the two groups.The lack of divergence cant be influenced by treatment bias, especially since the prior analysis revealed the differences between the cytocan and tamoxifen group better. Also since the variables were more general and put broad categories into a single cohort, it makes sense that the p value supports the null hypothesis
